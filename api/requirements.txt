@@ -1,0 +1,10 @@
+fastapi==0.111.0
+uvicorn[standard]==0.30.1
+python-multipart==0.0.9
+openai==1.35.0
+pydub==0.25.1
+langdetect==1.0.9
+indic-transliteration==2.3.50
+reportlab==4.2.0
+httpx==0.27.0
+python-dotenv==1.0.1

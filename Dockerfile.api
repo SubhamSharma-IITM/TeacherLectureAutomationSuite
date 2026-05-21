@@ -1,16 +1,35 @@
 FROM python:3.11-slim
 
-# Install ffmpeg for audio processing
-RUN apt-get update && apt-get install -y ffmpeg curl && rm -rf /var/lib/apt/lists/*
+# System deps: ffmpeg for audio, libmagic1 for MIME validation, curl for healthcheck
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends ffmpeg curl libmagic1 && \
+    rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
+# Install Python dependencies
 COPY api/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Download Devanagari font for PDF export
+RUN curl -L -o NotoSansDevanagari-Regular.ttf \
+    "https://github.com/googlefonts/noto-fonts/raw/main/hinted/ttf/NotoSansDevanagari/NotoSansDevanagari-Regular.ttf"
+
+# Copy application code
 COPY api/ .
 
+# Persistent storage for uploads and exports
 RUN mkdir -p uploads exports
+VOLUME ["/app/uploads", "/app/exports"]
+
+# Run as non-root user
+RUN adduser --disabled-password --gecos "" appuser && \
+    chown -R appuser:appuser /app
+USER appuser
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
 
 EXPOSE 8000
 

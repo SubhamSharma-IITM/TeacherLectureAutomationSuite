@@ -1,3 +1,5 @@
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans:wght@400;500;600;700&family=Noto+Sans+Devanagari:wght@400;500;600;700&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -5,5 +7,8 @@
 @layer base {
   html {
     font-family: "Noto Sans", "Noto Sans Devanagari", system-ui, sans-serif;
+  }
+  body {
+    @apply text-gray-900 bg-stone-50;
   }
 }

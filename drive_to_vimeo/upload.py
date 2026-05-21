@@ -1,7 +1,7 @@
 """
 Drive → Vimeo Uploader
 Takes a Google Drive folder and uploads all videos in it to Vimeo.
-Spits out a CSV with the Vimeo links when done.
+Spits out a CSV with the Vimeo links incrementally when done.
 """
 
 import os
@@ -11,12 +11,12 @@ import argparse
 import tempfile
 import mimetypes
 
-# ── Third-party ──────────────────────────────────────────────────────────────
+# ── Third-party Dependencies Validation ────────────────────────────────────────
 
 try:
     import vimeo
 except ImportError:
-    sys.exit("Run: pip install PyVimeo")
+    sys.exit("Error: PyVimeo missing. Run: pip install PyVimeo")
 
 try:
     from googleapiclient.discovery import build
@@ -25,10 +25,12 @@ try:
     from google.auth.transport.requests import Request
     from google.oauth2.credentials import Credentials
 except ImportError:
-    sys.exit("Run: pip install google-api-python-client google-auth-oauthlib google-auth-httplib2")
+    sys.exit(
+        "Error: Google client libraries missing. "
+        "Run: pip install google-api-python-client google-auth-oauthlib google-auth-httplib2"
+    )
 
-
-# ── Config ───────────────────────────────────────────────────────────────────
+# ── Configuration Constants ───────────────────────────────────────────────────
 
 DRIVE_SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
 TOKEN_FILE = "token.json"
@@ -42,7 +44,7 @@ VIDEO_MIMETYPES = {
 }
 
 
-# ── Google Drive helpers ─────────────────────────────────────────────────────
+# ── Google Drive Helpers ─────────────────────────────────────────────────────
 
 def get_drive_service():
     """
@@ -53,24 +55,32 @@ def get_drive_service():
 
     # Reuse saved token if we have one
     if os.path.exists(TOKEN_FILE):
-        creds = Credentials.from_authorized_user_file(TOKEN_FILE, DRIVE_SCOPES)
+        try:
+            creds = Credentials.from_authorized_user_file(TOKEN_FILE, DRIVE_SCOPES)
+        except Exception:
+            creds = None
 
     # If token is missing or expired, refresh or re-authenticate
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
+            try:
+                creds.refresh(Request())
+            except Exception:
+                # If refresh payload is rejected, force programmatic re-auth flow
+                creds = None
+
+        if not creds:
             if not os.path.exists(CREDENTIALS_FILE):
                 sys.exit(
-                    f"\nMissing '{CREDENTIALS_FILE}'.\n"
+                    f"\nError: Missing '{CREDENTIALS_FILE}'.\n"
                     "Download it from: Google Cloud Console → APIs & Services → Credentials\n"
                     "Choose 'OAuth 2.0 Client ID' (Desktop App) → Download JSON → rename to credentials.json"
                 )
             flow = InstalledAppFlow.from_client_secrets_file(CREDENTIALS_FILE, DRIVE_SCOPES)
             creds = flow.run_local_server(port=0)
 
-        # Save for next time
-        with open(TOKEN_FILE, "w") as f:
+        # Save context for next loop
+        with open(TOKEN_FILE, "w", encoding="utf-8") as f:
             f.write(creds.to_json())
 
     return build("drive", "v3", credentials=creds)
@@ -84,31 +94,38 @@ def list_videos_in_folder(drive, folder_id):
     videos = []
     page_token = None
 
-    while True:
-        result = drive.files().list(
-            q=f"'{folder_id}' in parents and trashed = false",
-            spaces="drive",
-            fields="nextPageToken, files(id, name, mimeType, size)",
-            pageToken=page_token,
-        ).execute()
+    try:
+        while True:
+            result = drive.files().list(
+                q=f"'{folder_id}' in parents and trashed = false",
+                spaces="drive",
+                fields="nextPageToken, files(id, name, mimeType, size)",
+                pageToken=page_token,
+            ).execute()
 
-        for file in result.get("files", []):
-            mime = file.get("mimeType", "")
-            guessed_mime, _ = mimetypes.guess_type(file["name"])
+            files_list = result.get("files", [])
+            for file_item in files_list:
+                if "name" not in file_item or "id" not in file_item:
+                    continue
 
-            is_video = mime in VIDEO_MIMETYPES or (guessed_mime and guessed_mime in VIDEO_MIMETYPES)
-            if is_video:
-                videos.append(file)
+                mime = file_item.get("mimeType", "")
+                guessed_mime, _ = mimetypes.guess_type(file_item["name"])
 
-        page_token = result.get("nextPageToken")
-        if not page_token:
-            break
+                is_video = (mime in VIDEO_MIMETYPES) or (guessed_mime and guessed_mime in VIDEO_MIMETYPES)
+                if is_video:
+                    videos.append(file_item)
+
+            page_token = result.get("nextPageToken")
+            if not page_token or not files_list:
+                break
+    except Exception as e:
+        sys.exit(f"Error querying files from Google Drive API: {e}")
 
     return videos
 
 
 def download_file(drive, file_id, save_path):
-    """Downloads a file from Drive in 10MB chunks."""
+    """Downloads a file from Drive in 10MB chunks safely."""
     request = drive.files().get_media(fileId=file_id)
 
     with open(save_path, "wb") as f:
@@ -119,11 +136,10 @@ def download_file(drive, file_id, save_path):
             if progress:
                 pct = int(progress.progress() * 100)
                 print(f"    {pct}% downloaded...", end="\r")
+    print()  # newline after progress execution clears lines
 
-    print()  # newline after progress
 
-
-# ── Vimeo helpers ─────────────────────────────────────────────────────────────
+# ── Vimeo Helpers ─────────────────────────────────────────────────────────────
 
 def upload_to_vimeo(client, file_path, title):
     """
@@ -142,11 +158,13 @@ def upload_to_vimeo(client, file_path, title):
 
 def vimeo_link(uri):
     """Converts '/videos/123456789' → 'https://vimeo.com/123456789'"""
+    if not uri:
+        return ""
     video_id = uri.strip("/").split("/")[-1]
     return f"https://vimeo.com/{video_id}"
 
 
-# ── Main ──────────────────────────────────────────────────────────────────────
+# ── Main Runtime Execution ────────────────────────────────────────────────────
 
 def main():
     parser = argparse.ArgumentParser(
@@ -154,12 +172,12 @@ def main():
     )
     parser.add_argument("--folder-id",   required=True, help="Google Drive folder ID (from the URL)")
     parser.add_argument("--vimeo-token", default=os.environ.get("VIMEO_ACCESS_TOKEN"), help="Vimeo access token")
-    parser.add_argument("--output-csv",  default="vimeo_links.csv", help="Where to save the results (default: vimeo_links.csv)")
+    parser.add_argument("--output-csv",  default="vimeo_links.csv", help="Where to save results (default: vimeo_links.csv)")
     args = parser.parse_args()
 
     if not args.vimeo_token:
         sys.exit(
-            "\nVimeo token is required.\n"
+            "\nError: Vimeo token is required.\n"
             "Pass it with --vimeo-token or set the VIMEO_ACCESS_TOKEN environment variable.\n"
             "Get a token at: https://developer.vimeo.com/apps"
         )
@@ -173,61 +191,74 @@ def main():
     print("Connecting to Vimeo...")
     vimeo_client = vimeo.VimeoClient(token=args.vimeo_token)
 
-    me = vimeo_client.get("/me")
-    if me.status_code != 200:
-        sys.exit(f"Vimeo auth failed: {me.json()}")
-    print(f"Logged in as: {me.json().get('name', 'unknown')}\n")
+    try:
+        me = vimeo_client.get("/me")
+        if me.status_code != 200:
+            sys.exit(f"Vimeo auth failed: {me.json()}")
+        print(f"Logged in as: {me.json().get('name', 'unknown')}\n")
+    except Exception as e:
+        sys.exit(f"Critical error connecting to Vimeo API server: {e}")
 
     # ── Find videos ──────────────────────────────────────────────────────────
     print(f"Looking for videos in folder: {args.folder_id}")
     videos = list_videos_in_folder(drive, args.folder_id)
 
     if not videos:
-        sys.exit("No videos found. Double-check the folder ID and make sure the folder is shared with your Google account.")
+        sys.exit("No videos found. Double-check the folder ID and make sure files exist inside.")
 
     print(f"Found {len(videos)} video(s):\n")
     for v in videos:
         size_mb = int(v.get("size", 0)) / (1024 * 1024)
         print(f"  • {v['name']}  ({size_mb:.1f} MB)")
-
     print()
 
-    # ── Process each video ───────────────────────────────────────────────────
-    results = []
-
-    with tempfile.TemporaryDirectory() as tmp:
-        for i, video in enumerate(videos, start=1):
-            name  = video["name"]
-            title = os.path.splitext(name)[0]  # strip extension for the Vimeo title
-
-            print(f"[{i}/{len(videos)}] {name}")
-
-            local_path = os.path.join(tmp, name)
-
-            try:
-                print("  Downloading from Google Drive...")
-                download_file(drive, video["id"], local_path)
-
-                print("  Uploading to Vimeo...")
-                uri  = upload_to_vimeo(vimeo_client, local_path, title)
-                link = vimeo_link(uri)
-
-                print(f"  Done! → {link}\n")
-                results.append({"file": name, "vimeo_url": link, "status": "success"})
-
-            except Exception as e:
-                print(f"  Failed: {e}\n")
-                results.append({"file": name, "vimeo_url": "", "status": f"error: {e}"})
-
-    # ── Save results ─────────────────────────────────────────────────────────
-    with open(args.output_csv, "w", newline="", encoding="utf-8") as f:
+    # ── Process & Stream Logs Dynamically ─────────────────────────────────────
+    csv_file_exists = os.path.exists(args.output_csv)
+    
+    with open(args.output_csv, "a", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=["file", "vimeo_url", "status"])
-        writer.writeheader()
-        writer.writerows(results)
+        if not csv_file_exists or os.path.getsize(args.output_csv) == 0:
+            writer.writeheader()
 
-    # ── Summary ──────────────────────────────────────────────────────────────
-    success = [r for r in results if r["status"] == "success"]
-    failed  = [r for r in results if r["status"] != "success"]
+        results_summary = []
+        
+        with tempfile.TemporaryDirectory() as tmp:
+            for i, video in enumerate(videos, start=1):
+                name = video["name"]
+                title = os.path.splitext(name)[0]
+
+                print(f"[{i}/{len(videos)}] {name}")
+                local_path = os.path.join(tmp, name)
+
+                try:
+                    print("  Downloading from Google Drive...")
+                    download_file(drive, video["id"], local_path)
+
+                    print("  Uploading to Vimeo...")
+                    uri = upload_to_vimeo(vimeo_client, local_path, title)
+                    link = vimeo_link(uri)
+
+                    print(f"  Done! → {link}\n")
+                    row = {"file": name, "vimeo_url": link, "status": "success"}
+                except Exception as e:
+                    print(f"  Failed: {e}\n")
+                    row = {"file": name, "vimeo_url": "", "status": f"error: {e}"}
+                
+                # Write row immediately after execution to prevent data drops on unexpected timeouts
+                writer.writerow(row)
+                f.flush()
+                results_summary.append(row)
+                
+                # Cleanup single file manually out of memory context block footprint
+                if os.path.exists(local_path):
+                    try:
+                        os.unlink(local_path)
+                    except Exception:
+                        pass
+
+    # ── Summary Reports ──────────────────────────────────────────────────────────
+    success = [r for r in results_summary if r["status"] == "success"]
+    failed = [r for r in results_summary if r["status"] != "success"]
 
     print("─" * 50)
     print(f"Done! {len(success)}/{len(videos)} uploaded successfully.")
@@ -236,8 +267,7 @@ def main():
     if success:
         print("Vimeo links:")
         for r in success:
-            print(f"  {r['file']}")
-            print(f"    → {r['vimeo_url']}")
+            print(f"  {r['file']}\n    → {r['vimeo_url']}")
 
     if failed:
         print(f"\nFailed ({len(failed)}):")

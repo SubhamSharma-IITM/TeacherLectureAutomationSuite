@@ -5,26 +5,37 @@ import TranscriptViewer from "./components/TranscriptViewer";
 import LanguageBadge from "./components/LanguageBadge";
 import ExportPanel from "./components/ExportPanel";
 import SettingsPanel from "./components/SettingsPanel";
+import AssignmentPanel from "./components/AssignmentPanel";   // NEW
 import { useTranscription } from "./hooks/useTranscription";
 
 export default function App() {
-  const [darkMode, setDarkMode] = useState(false);
+  const [darkMode, setDarkMode] = useState(
+    () => localStorage.getItem("darkMode") === "true"
+  );
   const [settings, setSettings] = useState({
     languageHint: "auto",
-    script: "devanagari",
+    script:       "devanagari",
+    provider:     "whisper",       // NEW
   });
-  const [activeTab, setActiveTab] = useState("upload"); // "upload" | "record"
+  const [activeTab, setActiveTab] = useState("upload");
 
-  const { jobId, status, result, startTranscription, reset } =
-    useTranscription();
+  const { jobId, status, result, startTranscription, reset } = useTranscription();
 
   const handleAudioReady = (audioBlob, filename) => {
     startTranscription(audioBlob, filename, settings);
   };
 
+  const toggleDark = () => {
+    setDarkMode((prev) => {
+      localStorage.setItem("darkMode", !prev);
+      return !prev;
+    });
+  };
+
   return (
     <div className={darkMode ? "dark" : ""}>
       <div className="min-h-screen bg-stone-50 dark:bg-gray-950 transition-colors duration-300">
+
         {/* Header */}
         <header className="border-b border-stone-200 dark:border-gray-800 bg-white dark:bg-gray-900 px-6 py-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
@@ -44,7 +55,7 @@ export default function App() {
           <div className="flex items-center gap-3">
             <SettingsPanel settings={settings} onChange={setSettings} />
             <button
-              onClick={() => setDarkMode(!darkMode)}
+              onClick={toggleDark}
               className="w-9 h-9 rounded-lg border border-stone-200 dark:border-gray-700 flex items-center justify-center hover:bg-stone-100 dark:hover:bg-gray-800 transition-colors"
               title="Toggle dark mode"
             >
@@ -54,10 +65,10 @@ export default function App() {
         </header>
 
         <main className="max-w-4xl mx-auto px-4 py-8 space-y-6">
-          {/* Input Section */}
+
+          {/* Input section */}
           {!result && (
             <div className="bg-white dark:bg-gray-900 rounded-2xl border border-stone-200 dark:border-gray-800 overflow-hidden">
-              {/* Tab switcher */}
               <div className="flex border-b border-stone-200 dark:border-gray-800">
                 {["upload", "record"].map((tab) => (
                   <button
@@ -74,6 +85,18 @@ export default function App() {
                 ))}
               </div>
 
+              {/* Provider badge */}
+              <div className="px-6 pt-4 flex items-center gap-2">
+                <span className="text-xs text-gray-400 dark:text-gray-500">Provider:</span>
+                <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${
+                  settings.provider === "grok"
+                    ? "bg-purple-100 text-purple-700 dark:bg-purple-950 dark:text-purple-300"
+                    : "bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300"
+                }`}>
+                  {settings.provider === "grok" ? "⚡ Grok (long video)" : "🎙️ Whisper"}
+                </span>
+              </div>
+
               <div className="p-6">
                 {activeTab === "upload" ? (
                   <Uploader onAudioReady={handleAudioReady} disabled={status === "processing"} />
@@ -84,7 +107,7 @@ export default function App() {
             </div>
           )}
 
-          {/* Processing State */}
+          {/* Processing */}
           {status === "processing" && (
             <div className="bg-white dark:bg-gray-900 rounded-2xl border border-stone-200 dark:border-gray-800 p-8 text-center">
               <div className="w-14 h-14 mx-auto mb-4 relative">
@@ -93,7 +116,10 @@ export default function App() {
               </div>
               <p className="font-semibold text-gray-800 dark:text-gray-100">Transcribing...</p>
               <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
-                Detecting language and transcribing your lecture
+                {settings.provider === "grok"
+                  ? "Using Grok for long video — this may take a few minutes"
+                  : "Detecting language and transcribing your lecture"
+                }
               </p>
             </div>
           )}
@@ -101,11 +127,12 @@ export default function App() {
           {/* Result */}
           {result && status === "done" && (
             <div className="space-y-4">
-              {/* Language Info Bar */}
+
+              {/* Language info bar */}
               <div className="flex items-center justify-between bg-white dark:bg-gray-900 rounded-2xl border border-stone-200 dark:border-gray-800 px-5 py-3">
                 <LanguageBadge
                   detectedLanguage={result.detected_language}
-                  languageMix={result.language_mix}
+                  languageMix={result.language_mix ?? {}}
                 />
                 <div className="flex gap-2">
                   <ExportPanel jobId={jobId} />
@@ -119,7 +146,10 @@ export default function App() {
               </div>
 
               {/* Transcript */}
-              <TranscriptViewer segments={result.segments} />
+              <TranscriptViewer segments={result.segments ?? []} />
+
+              {/* Assignment panel — NEW */}
+              <AssignmentPanel jobId={jobId} />
             </div>
           )}
 

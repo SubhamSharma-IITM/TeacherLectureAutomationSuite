@@ -1,225 +1,201 @@
-# 🎙️ Lecture Transcriber — Hindi & English AI Transcription Tool
+# TeacherLectureAutomationSuite
 
-A full-featured web application that automatically **detects** whether a lecture is in **Hindi**, **English**, or **Hinglish** (code-mixed), and transcribes it accordingly using OpenAI Whisper + custom post-processing.
-
----
-
-## ✨ Features
-
-- 🔍 **Automatic Language Detection** — Hindi, English, or mixed (Hinglish)
-- 🎙️ **Live Recording** — Capture audio directly from the browser
-- 📁 **File Upload** — MP3, MP4, WAV, OGG, WEBM support
-- 📝 **Real-time Transcription** — Streamed word-by-word output
-- 🌐 **Script Toggle** — View Hindi in Devanagari or Roman (transliteration)
-- 📤 **Export** — Download as TXT, PDF, or SRT (subtitle format)
-- 📊 **Language Stats** — Percentage breakdown of Hindi vs English segments
-- 🕑 **Timestamped Segments** — Click a timestamp to replay that segment
-- 🌙 **Dark / Light Mode**
+A full-stack tool for transcribing Hindi/English/Hinglish lectures, generating subtitle files, and creating AI-powered practice assignments from lecture content.
 
 ---
 
-## 🖥️ Tech Stack
+## Features
 
-| Layer | Technology |
-|---|---|
-| Frontend | React 18 + Vite |
-| Styling | Tailwind CSS + custom CSS |
-| Transcription API | OpenAI Whisper API (`whisper-1`) |
-| Language Detection | `langdetect` + custom Devanagari heuristic |
-| Transliteration | `indic-transliteration` (Python) |
-| Backend | FastAPI (Python 3.11) |
-| Audio Processing | `pydub` + `ffmpeg` |
-| Storage | Local filesystem (pluggable to S3) |
+- **Audio transcription** via OpenAI Whisper (short files) or Grok/xAI (long videos)
+- **Language detection** — automatically identifies Hindi, English, and Hinglish (code-mixed) segments
+- **Devanagari / Roman script** toggle for Hindi output
+- **Export** to TXT, SRT subtitles, or PDF with correct Devanagari font rendering
+- **Assignment generator** — Claude (Anthropic) generates MCQ, Short Answer, and True/False questions from the transcript
+- **Record in-browser** or upload existing audio files (MP3, WAV, OGG, WEBM, MP4)
 
 ---
 
-## 📁 Project Structure
+## Project Structure
 
 ```
-lecture-transcriber/
-├── api/                         # FastAPI backend
-│   ├── main.py                  # App entry point, routes
-│   ├── transcribe.py            # Whisper integration
-│   ├── language_detect.py       # Lang detection logic
-│   ├── transliterate.py         # Devanagari ↔ Roman
-│   ├── export.py                # TXT / PDF / SRT export
+TeacherLectureAutomationSuite/
+├── api/                        # FastAPI backend
+│   ├── main.py                 # API routes and job management
+│   ├── transcribe.py           # Whisper transcription + chunking
+│   ├── transcribe_grok.py      # Grok transcription for long videos
+│   ├── language_detect.py      # Hindi/English/Hinglish detection
+│   ├── transliterate.py        # Devanagari ↔ Roman transliteration
+│   ├── export.py               # TXT / SRT / PDF export
+│   ├── assignment.py           # Claude-powered assignment generation
+│   ├── redis_store.py          # Redis job store
 │   └── requirements.txt
-│
-├── src/                         # React frontend
-│   ├── components/
-│   │   ├── Recorder.jsx         # Live mic recording
-│   │   ├── Uploader.jsx         # Drag-and-drop file upload
-│   │   ├── TranscriptViewer.jsx # Timestamped transcript display
-│   │   ├── LanguageBadge.jsx    # Detected language indicator
-│   │   ├── ExportPanel.jsx      # Export controls
-│   │   └── SettingsPanel.jsx    # Language / script preferences
-│   ├── hooks/
-│   │   ├── useRecorder.js       # MediaRecorder hook
-│   │   └── useTranscription.js  # API polling / SSE hook
-│   ├── utils/
-│   │   ├── api.js               # Axios API client
-│   │   └── formatTime.js        # Seconds → MM:SS
-│   ├── styles/
-│   │   └── globals.css
+├── src/                        # React frontend (Vite + Tailwind)
 │   ├── App.jsx
-│   └── main.jsx
-│
-├── tests/
-│   ├── test_transcribe.py
-│   ├── test_language_detect.py
-│   └── test_export.py
-│
+│   ├── hooks/
+│   │   ├── useTranscription.js
+│   │   └── useRecorder.js
+│   ├── components/
+│   │   ├── Uploader.jsx
+│   │   ├── Recorder.jsx
+│   │   ├── TranscriptViewer.jsx
+│   │   ├── LanguageBadge.jsx
+│   │   ├── ExportPanel.jsx
+│   │   ├── SettingsPanel.jsx
+│   │   └── AssignmentPanel.jsx
+│   ├── utils/
+│   │   ├── api.js
+│   │   └── formatTime.js
+│   └── styles/
+│       └── globals.css
+├── tests/                      # pytest test suite
 ├── docs/
-│   ├── architecture.md
-│   └── api-reference.md
-│
-├── public/
-│   └── sample_lecture.mp3       # Demo audio file
-│
-├── .env.example
-├── .gitignore
-├── docker-compose.yml
+├── drive_to_vimeo/
 ├── Dockerfile.api
 ├── Dockerfile.frontend
-└── README.md
+├── docker-compose.yml
+├── nginx.conf
+├── .env.example
+└── .dockerignore
 ```
 
 ---
 
-## 🚀 Quick Start
+## Prerequisites
 
-### Prerequisites
-- Node.js 18+
-- Python 3.11+
-- ffmpeg installed (`brew install ffmpeg` / `apt install ffmpeg`)
-- OpenAI API Key
+| Tool | Version |
+|------|---------|
+| Python | 3.11+ |
+| Node.js | 20+ |
+| Docker + Docker Compose | any recent |
+| Redis | 7+ (handled by Docker) |
 
-### 1. Clone the repo
+**System libraries required on the host (if not using Docker):**
 ```bash
-git clone https://github.com/yourusername/lecture-transcriber.git
-cd lecture-transcriber
+# Ubuntu / Debian
+sudo apt-get install ffmpeg libmagic1
+
+# macOS
+brew install ffmpeg libmagic
 ```
 
-### 2. Set up environment variables
+---
+
+## Quick Start (Docker — recommended)
+
 ```bash
+# 1. Clone the repo
+git clone https://github.com/SubhamSharma-IITM/TeacherLectureAutomationSuite.git
+cd TeacherLectureAutomationSuite
+
+# 2. Set up environment variables
 cp .env.example .env
-# Edit .env and add your OPENAI_API_KEY
+# Edit .env and fill in your API keys (see below)
+
+# 3. Start everything
+docker-compose up --build
 ```
 
-### 3. Start the backend
+- Frontend: http://localhost:3000
+- API docs: http://localhost:8000/docs
+- Health: http://localhost:8000/health
+
+---
+
+## Environment Variables
+
+Copy `.env.example` to `.env` and fill in:
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `OPENAI_API_KEY` | Yes | OpenAI API key for Whisper |
+| `ANTHROPIC_API_KEY` | Yes | Anthropic API key for assignment generation |
+| `XAI_API_KEY` | For Grok | xAI API key for long-video transcription |
+| `REDIS_URL` | Yes | Redis connection string (default: `redis://localhost:6379/0`) |
+| `WHISPER_MODEL` | No | Whisper model (default: `whisper-1`) |
+| `CLAUDE_MODEL` | No | Claude model (default: `claude-sonnet-4-20250514`) |
+| `MAX_FILE_SIZE_MB` | No | Upload limit in MB (default: `100`) |
+| `DEVANAGARI_FONT_PATH` | For PDF | Path to `NotoSansDevanagari-Regular.ttf` |
+| `ALLOWED_ORIGINS` | No | Comma-separated CORS origins |
+| `LANGUAGE_HINT` | No | Server-side default: `auto`, `hi`, or `en` |
+
+---
+
+## Local Development (without Docker)
+
+### Backend
+
 ```bash
 cd api
-pip install -r requirements.txt
+pip install -r requirements.txt --break-system-packages
+
+# Redis must be running
+redis-server &
+
 uvicorn main:app --reload --port 8000
 ```
 
-### 4. Start the frontend
+### Frontend
+
 ```bash
-# From project root
+# From repo root
 npm install
 npm run dev
-# Opens at http://localhost:5173
 ```
 
-### 5. (Optional) Docker Compose
+### Tests
+
 ```bash
-docker-compose up --build
-# Frontend: http://localhost:3000
-# API:      http://localhost:8000
+cd tests
+pip install pytest --break-system-packages
+pytest -v
 ```
 
 ---
 
-## 🔧 Environment Variables
+## API Reference
 
-| Variable | Description | Required |
-|---|---|---|
-| `OPENAI_API_KEY` | Your OpenAI API key | ✅ |
-| `WHISPER_MODEL` | `whisper-1` (default) | ❌ |
-| `MAX_FILE_SIZE_MB` | Upload limit in MB (default: 100) | ❌ |
-| `LANGUAGE_HINT` | Force language: `hi`, `en`, or `auto` | ❌ |
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/api/transcribe` | Upload audio and start transcription job |
+| `GET` | `/api/transcribe/{job_id}` | Poll job status / get result |
+| `DELETE` | `/api/transcribe/{job_id}` | Delete job and clean up files |
+| `GET` | `/api/export/{job_id}` | Download transcript (`?format=txt\|srt\|pdf`) |
+| `POST` | `/api/assignment/{job_id}` | Generate practice assignment from transcript |
+| `GET` | `/health` | Service health check |
+
+### Upload parameters (`POST /api/transcribe`)
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `file` | File | — | Audio file (MP3, WAV, OGG, WEBM, MP4) |
+| `language_hint` | string | `auto` | `auto`, `hi`, or `en` |
+| `script` | string | `devanagari` | `devanagari` or `roman` |
+| `provider` | string | `whisper` | `whisper` or `grok` |
 
 ---
 
-## 🌐 API Reference
+## Devanagari Font for PDF Export
 
-### `POST /api/transcribe`
-Upload an audio file for transcription.
+The PDF exporter requires `NotoSansDevanagari-Regular.ttf`. The Dockerfile downloads it automatically. For local dev:
 
-**Request:** `multipart/form-data`
-| Field | Type | Description |
-|---|---|---|
-| `file` | File | Audio file (mp3, wav, mp4, ogg, webm) |
-| `language_hint` | string | `"auto"`, `"hi"`, or `"en"` |
-| `script` | string | `"devanagari"` or `"roman"` |
-
-**Response:**
-```json
-{
-  "job_id": "abc123",
-  "status": "processing"
-}
+```bash
+curl -L -o api/NotoSansDevanagari-Regular.ttf \
+  "https://github.com/googlefonts/noto-fonts/raw/main/hinted/ttf/NotoSansDevanagari/NotoSansDevanagari-Regular.ttf"
 ```
 
----
-
-### `GET /api/transcribe/{job_id}`
-Poll for transcription result.
-
-**Response:**
-```json
-{
-  "job_id": "abc123",
-  "status": "done",
-  "detected_language": "hi",
-  "language_mix": { "hindi": 72, "english": 28 },
-  "segments": [
-    {
-      "id": 0,
-      "start": 0.0,
-      "end": 4.2,
-      "text": "नमस्ते, आज हम machine learning के बारे में बात करेंगे।",
-      "language": "hi"
-    }
-  ],
-  "full_text": "..."
-}
-```
+Then set `DEVANAGARI_FONT_PATH=NotoSansDevanagari-Regular.ttf` in your `.env`.
 
 ---
 
-### `GET /api/export/{job_id}?format=txt|pdf|srt`
-Download the transcript in the specified format.
+## Contributing
+
+1. Fork the repo
+2. Create a feature branch: `git checkout -b feature/your-feature`
+3. Run tests: `pytest tests/ -v`
+4. Push and open a PR
 
 ---
 
-## 🧠 Language Detection Logic
+## License
 
-```
-1. Run Whisper with language=None (auto-detect)
-2. Whisper returns detected_language ("hi" or "en")
-3. For each segment, apply custom heuristic:
-   a. Count Devanagari characters → if > 20% → tag as Hindi
-   b. Run langdetect on segment text → secondary signal
-   c. Code-mixed segments tagged as "hi+en"
-4. Compute overall language_mix percentages
-```
-
-The tool handles **Hinglish** gracefully — segments are individually tagged so you get an accurate mix breakdown rather than forcing everything into one language.
-
----
-
-## 🤝 Contributing
-
-1. Fork the repository
-2. Create a feature branch: `git checkout -b feature/my-feature`
-3. Commit your changes: `git commit -m 'feat: add my feature'`
-4. Push and open a Pull Request
-
-Please follow [Conventional Commits](https://www.conventionalcommits.org/).
-
----
-
-## 📄 License
-
-MIT License — see [LICENSE](LICENSE) for details.
+MIT

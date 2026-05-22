@@ -2,8 +2,9 @@
 import os
 import uuid
 import asyncio
+import json
 from pathlib import Path
-from typing import Optional, List
+from typing import Optional
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -22,7 +23,6 @@ app.add_middleware(
 UPLOAD_DIR = Path("uploads")
 UPLOAD_DIR.mkdir(exist_ok=True)
 
-# UPDATED: Added an optional error field so Pydantic knows how to parse error states
 class JobResponse(BaseModel):
     job_id: str
     status: str
@@ -30,8 +30,9 @@ class JobResponse(BaseModel):
     error: Optional[str] = None
     result: Optional[dict] = None
 
-def validate_audio_file(file: UploadFile) -> bool:
-    """Simple magic-bytes check (no external dependency)"""
+# 1. FIXED: Validates clean raw bytes instead of a fragile file stream wrapper
+def validate_audio_bytes(header: bytes) -> bool:
+    """Simple magic-bytes check on raw binary header data"""
     allowed_signatures = [
         b'\xff\xfb',      # MP3
         b'ID3',           # MP3
@@ -39,53 +40,54 @@ def validate_audio_file(file: UploadFile) -> bool:
         b'OggS',          # OGG
         b'\x00\x00\x00\x18ftypmp4',  # MP4/M4A
     ]
-    file.file.seek(0)
-    header = file.file.read(16)
-    file.file.seek(0)
     return any(header.startswith(sig) for sig in allowed_signatures)
 
 @app.post("/transcribe", response_model=JobResponse)
 async def transcribe_audio(file: UploadFile = File(...)):
-    if not validate_audio_file(file):
-        raise HTTPException(status_code=400, detail="Invalid audio file format")
-    
     job_id = str(uuid.uuid4())
     
-    # FIX 1: Read the file bytes completely right here while the request context is alive!
-    # This prevents the "I/O operation on closed file" error.
+    # FIX 2: Consume the file stream completely right here at the entrance.
     try:
         content = await file.read()
     except Exception as e:
+        # If the file reading fails, fail gracefully before touching Redis
         raise HTTPException(status_code=500, detail=f"Failed to read upload stream: {str(e)}")
     
-    redis_store.set_job(job_id, {"status": "processing", "progress": 0})
+    # Pass the first 16 bytes of our safe memory content array to validation
+    if not validate_audio_bytes(content[:16]):
+        raise HTTPException(status_code=400, detail="Invalid audio file format")
     
-    # Pass the raw binary content down to the background task instead of the ephemeral file object
+    # Save standard initial state to Redis securely
+    initial_job = {"job_id": job_id, "status": "processing", "progress": 0}
+    redis_store.set_job(job_id, initial_job)
+    
+    # Offload the fully stable byte contents to background task
     asyncio.create_task(process_transcription(job_id, file.filename, content))
     return JobResponse(job_id=job_id, status="processing")
 
-# UPDATED: Expects raw bytes and filename string now
 async def process_transcription(job_id: str, filename: str, content: bytes):
     try:
         file_path = UPLOAD_DIR / f"{job_id}_{filename}"
         file_path.write_bytes(content)
         
-        # TODO: Call your actual transcription logic here
+        # TODO: Insert your actual transcription or Whisper execution logic here
         
-        # FIX 2: Ensure job_id is saved alongside the payload on completion
-        redis_store.set_job(job_id, {
+        success_payload = {
             "job_id": job_id,
             "status": "completed", 
             "progress": 100, 
-            "result": {"transcript": "..."}
-        })
+            "result": {"transcript": "Your processed transcription text goes here."}
+        }
+        redis_store.set_job(job_id, success_payload)
+        
     except Exception as e:
-        # FIX 3: Ensure job_id is explicitly saved alongside the error description
-        redis_store.set_job(job_id, {
+        error_payload = {
             "job_id": job_id,
             "status": "error", 
+            "progress": 0,
             "error": str(e)
-        })
+        }
+        redis_store.set_job(job_id, error_payload)
 
 @app.get("/status/{job_id}", response_model=JobResponse)
 async def get_status(job_id: str):
@@ -93,16 +95,23 @@ async def get_status(job_id: str):
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     
-    # FIX 4: Safety double-check—if Redis lost the job_id, patch it dynamically
-    if isinstance(job, dict) and "job_id" not in job:
+    if isinstance(job, str):
+        try:
+            job = json.loads(job)
+        except:
+            pass
+            
+    # Absolute safety fallback: Always explicitly enforce the job_id back into the validated dict
+    if isinstance(job, dict):
         job["job_id"] = job_id
-        
+        if "result" in job and isinstance(job["result"], str):
+            try:
+                job["result"] = json.loads(job["result"])
+            except:
+                pass
+                
     return JobResponse(**job)
 
 @app.get("/health")
 async def health_check():
     return {"status": "ok", "redis": redis_store.health_check()}
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)

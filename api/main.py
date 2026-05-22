@@ -24,6 +24,14 @@ from transcribe_grok import transcribe_audio_grok
 from language_detect import detect_language_mix
 from export import export_transcript, cleanup_export
 from assignment import generate_assignment
+from redis_store import (
+    set_job,
+    get_job,
+    delete_job as redis_delete_job,
+    job_exists,
+    update_job_status,
+    health_check as redis_health_check,
+)
 
 # ── App Setup ──────────────────────────────────────────────────────────────────
 
@@ -49,8 +57,6 @@ app.add_middleware(
 UPLOAD_DIR = Path("uploads")
 UPLOAD_DIR.mkdir(exist_ok=True)
 
-RESULTS: dict = {}
-
 MAX_FILE_SIZE = int(os.getenv("MAX_FILE_SIZE_MB", 100)) * 1024 * 1024
 ALLOWED_TYPES = {
     "audio/mpeg", "audio/wav", "audio/ogg", "audio/webm",
@@ -71,7 +77,11 @@ async def root():
 
 @app.get("/health")
 async def health():
-    return {"status": "ok"}
+    redis_status = redis_health_check()
+    return {
+        "status": "ok" if redis_status["status"] == "ok" else "degraded",
+        "redis":  redis_status,
+    }
 
 
 @app.post("/api/transcribe", status_code=202)
@@ -82,7 +92,7 @@ async def start_transcription(
     file: UploadFile = File(...),
     language_hint: str = Form("auto"),
     script: str = Form("devanagari"),
-    provider: str = Form("whisper"),       # NEW: "whisper" | "grok"
+    provider: str = Form("whisper"),
 ):
     """
     Upload an audio/video file and start async transcription.
@@ -122,7 +132,7 @@ async def start_transcription(
     audio_path    = UPLOAD_DIR / f"{job_id}{suffix}"
     audio_path.write_bytes(content)
 
-    RESULTS[job_id] = {"status": "processing", "job_id": job_id, "provider": provider}
+    set_job(job_id, {"status": "processing", "job_id": job_id, "provider": provider})
 
     background_tasks.add_task(
         run_transcription,
@@ -139,25 +149,28 @@ async def start_transcription(
 @app.get("/api/transcribe/{job_id}")
 async def get_transcription(job_id: str):
     """Poll for transcription result."""
-    if job_id not in RESULTS:
+    if not job_exists(job_id):
         raise HTTPException(status_code=404, detail="Job not found")
-    return RESULTS[job_id]
+    return get_job(job_id)
 
 
 @app.get("/api/export/{job_id}")
 async def export(job_id: str, format: str = "txt"):
     """Download transcript as TXT, PDF, or SRT."""
-    if job_id not in RESULTS:
+    if not job_exists(job_id):
         raise HTTPException(status_code=404, detail="Job not found")
 
-    job = RESULTS[job_id]
+    job = get_job(job_id)
     if job["status"] != "done":
         raise HTTPException(status_code=409, detail="Transcription not complete yet")
     if format not in ("txt", "pdf", "srt"):
         raise HTTPException(status_code=400, detail="Format must be txt, pdf, or srt")
 
-    out_path = export_transcript(job_id, job, format)
-    RESULTS[job_id].setdefault("export_paths", []).append(out_path)
+    out_path     = export_transcript(job_id, job, format)
+    export_paths = job.get("export_paths", [])
+    export_paths.append(out_path)
+    job["export_paths"] = export_paths
+    set_job(job_id, job)
 
     media_types = {"txt": "text/plain", "pdf": "application/pdf", "srt": "text/plain"}
     return FileResponse(
@@ -180,10 +193,10 @@ async def create_assignment(
     Generate a practice assignment from a completed transcript.
     Powered by Claude (Anthropic).
     """
-    if job_id not in RESULTS:
+    if not job_exists(job_id):
         raise HTTPException(status_code=404, detail="Job not found")
 
-    job = RESULTS[job_id]
+    job = get_job(job_id)
     if job["status"] != "done":
         raise HTTPException(status_code=409, detail="Transcription not complete yet")
 
@@ -216,16 +229,16 @@ async def create_assignment(
 
 
 @app.delete("/api/transcribe/{job_id}")
-async def delete_job(job_id: str):
+async def delete_job_route(job_id: str):
     """Clean up a job, its audio file, and any exported files."""
-    if job_id not in RESULTS:
+    if not job_exists(job_id):
         raise HTTPException(status_code=404, detail="Job not found")
 
     for f in UPLOAD_DIR.glob(f"{job_id}*"):
         f.unlink(missing_ok=True)
 
     cleanup_export(job_id)
-    del RESULTS[job_id]
+    redis_delete_job(job_id)
     return {"message": "Job deleted"}
 
 
@@ -260,15 +273,15 @@ async def run_transcription(
         result["job_id"]       = job_id
         result["status"]       = "done"
 
-        RESULTS[job_id] = result
+        set_job(job_id, result)
 
     except Exception as exc:
-        RESULTS[job_id] = {
+        set_job(job_id, {
             "job_id":   job_id,
             "status":   "error",
             "error":    str(exc),
             "provider": provider,
-        }
+        })
     finally:
         for f in UPLOAD_DIR.glob(f"{job_id}*"):
             f.unlink(missing_ok=True)

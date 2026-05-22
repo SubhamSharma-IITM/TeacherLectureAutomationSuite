@@ -1,14 +1,15 @@
 """
 Lecture Transcriber — FastAPI Backend
-Handles audio upload, transcription via Whisper, language detection, and export.
+Handles audio upload, transcription via Whisper or Grok, language detection,
+export, and AI-powered assignment generation.
 """
 
 import os
 import uuid
 import asyncio
-import magic                          # python-magic: validates real file type
+import magic
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -19,18 +20,19 @@ from slowapi.errors import RateLimitExceeded
 import uvicorn
 
 from transcribe import transcribe_audio
+from transcribe_grok import transcribe_audio_grok
 from language_detect import detect_language_mix
-from export import export_transcript, cleanup_export   # FIX: import cleanup helper
+from export import export_transcript, cleanup_export
+from assignment import generate_assignment
 
 # ── App Setup ──────────────────────────────────────────────────────────────────
 
-# FIX: rate limiter — prevents upload abuse
 limiter = Limiter(key_func=get_remote_address)
 
 app = FastAPI(
     title="Lecture Transcriber API",
-    description="Hindi & English lecture transcription with automatic language detection",
-    version="1.1.0",
+    description="Hindi & English lecture transcription with Whisper and Grok support, plus AI assignment generation",
+    version="2.0.0",
 )
 
 app.state.limiter = limiter
@@ -38,7 +40,7 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000"],
+    allow_origins=os.getenv("ALLOWED_ORIGINS", "http://localhost:5173,http://localhost:3000").split(","),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -47,15 +49,14 @@ app.add_middleware(
 UPLOAD_DIR = Path("uploads")
 UPLOAD_DIR.mkdir(exist_ok=True)
 
-RESULTS: dict = {}   # In-memory store; swap for Redis in production
+RESULTS: dict = {}
 
-MAX_FILE_SIZE   = int(os.getenv("MAX_FILE_SIZE_MB", 100)) * 1024 * 1024
-ALLOWED_TYPES   = {
+MAX_FILE_SIZE = int(os.getenv("MAX_FILE_SIZE_MB", 100)) * 1024 * 1024
+ALLOWED_TYPES = {
     "audio/mpeg", "audio/wav", "audio/ogg", "audio/webm",
     "video/mp4",  "audio/mp4", "audio/x-wav",
 }
-# FIX: magic-byte signatures for the same formats (used for real validation)
-ALLOWED_MAGIC   = {
+ALLOWED_MAGIC = {
     "audio/mpeg", "audio/wav", "audio/ogg", "audio/webm",
     "video/mp4",  "audio/mp4", "audio/x-m4a",
 }
@@ -74,32 +75,33 @@ async def health():
 
 
 @app.post("/api/transcribe", status_code=202)
-@limiter.limit("10/minute")           # FIX: rate limit uploads per IP
+@limiter.limit("10/minute")
 async def start_transcription(
-    request: Request,                 # required by slowapi
+    request: Request,
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     language_hint: str = Form("auto"),
     script: str = Form("devanagari"),
+    provider: str = Form("whisper"),       # NEW: "whisper" | "grok"
 ):
     """
-    Upload an audio file and start async transcription.
+    Upload an audio/video file and start async transcription.
     Returns a job_id to poll for results.
+    Provider 'grok' supports larger files and longer videos.
     """
-    # FIX: validate language_hint and script values explicitly
     if language_hint not in ("auto", "hi", "en"):
         raise HTTPException(status_code=400, detail="language_hint must be 'auto', 'hi', or 'en'")
     if script not in ("devanagari", "roman"):
         raise HTTPException(status_code=400, detail="script must be 'devanagari' or 'roman'")
+    if provider not in ("whisper", "grok"):
+        raise HTTPException(status_code=400, detail="provider must be 'whisper' or 'grok'")
 
-    # FIX: validate content-type header (first line of defence)
     if file.content_type not in ALLOWED_TYPES:
         raise HTTPException(
             status_code=415,
             detail=f"Unsupported file type '{file.content_type}'. Allowed: mp3, wav, ogg, webm, mp4",
         )
 
-    # Read and size-check
     content = await file.read()
     if len(content) > MAX_FILE_SIZE:
         raise HTTPException(
@@ -107,7 +109,6 @@ async def start_transcription(
             detail=f"File too large. Maximum allowed: {MAX_FILE_SIZE // (1024 * 1024)} MB",
         )
 
-    # FIX: validate real MIME type via magic bytes — can't be spoofed by the client
     real_mime = magic.from_buffer(content, mime=True)
     if real_mime not in ALLOWED_MAGIC:
         raise HTTPException(
@@ -115,15 +116,13 @@ async def start_transcription(
             detail=f"File content does not match an allowed audio/video type (detected: {real_mime})",
         )
 
-    # FIX: guard against None filename
     safe_filename = file.filename or "upload"
     suffix        = Path(safe_filename).suffix or ".mp3"
-
-    job_id     = str(uuid.uuid4())
-    audio_path = UPLOAD_DIR / f"{job_id}{suffix}"
+    job_id        = str(uuid.uuid4())
+    audio_path    = UPLOAD_DIR / f"{job_id}{suffix}"
     audio_path.write_bytes(content)
 
-    RESULTS[job_id] = {"status": "processing", "job_id": job_id}
+    RESULTS[job_id] = {"status": "processing", "job_id": job_id, "provider": provider}
 
     background_tasks.add_task(
         run_transcription,
@@ -131,9 +130,10 @@ async def start_transcription(
         audio_path=str(audio_path),
         language_hint=language_hint,
         script=script,
+        provider=provider,
     )
 
-    return {"job_id": job_id, "status": "processing"}
+    return {"job_id": job_id, "status": "processing", "provider": provider}
 
 
 @app.get("/api/transcribe/{job_id}")
@@ -153,13 +153,10 @@ async def export(job_id: str, format: str = "txt"):
     job = RESULTS[job_id]
     if job["status"] != "done":
         raise HTTPException(status_code=409, detail="Transcription not complete yet")
-
     if format not in ("txt", "pdf", "srt"):
         raise HTTPException(status_code=400, detail="Format must be txt, pdf, or srt")
 
     out_path = export_transcript(job_id, job, format)
-
-    # FIX: track export paths so delete_job can clean them up
     RESULTS[job_id].setdefault("export_paths", []).append(out_path)
 
     media_types = {"txt": "text/plain", "pdf": "application/pdf", "srt": "text/plain"}
@@ -170,19 +167,64 @@ async def export(job_id: str, format: str = "txt"):
     )
 
 
+@app.post("/api/assignment/{job_id}", status_code=200)
+@limiter.limit("5/minute")
+async def create_assignment(
+    request: Request,
+    job_id: str,
+    question_types: List[str] = Form(["mcq", "short_answer", "true_false"]),
+    difficulty: str           = Form("medium"),
+    num_questions: int        = Form(10),
+):
+    """
+    Generate a practice assignment from a completed transcript.
+    Powered by Claude (Anthropic).
+    """
+    if job_id not in RESULTS:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    job = RESULTS[job_id]
+    if job["status"] != "done":
+        raise HTTPException(status_code=409, detail="Transcription not complete yet")
+
+    if difficulty not in ("easy", "medium", "hard"):
+        raise HTTPException(status_code=400, detail="difficulty must be easy, medium, or hard")
+    if not 1 <= num_questions <= 50:
+        raise HTTPException(status_code=400, detail="num_questions must be between 1 and 50")
+
+    valid_types = {"mcq", "short_answer", "true_false"}
+    invalid     = set(question_types) - valid_types
+    if invalid:
+        raise HTTPException(status_code=400, detail=f"Invalid question types: {invalid}")
+
+    full_text = job.get("full_text", "")
+    if not full_text:
+        raise HTTPException(status_code=422, detail="Transcript has no text content")
+
+    try:
+        assignment = await asyncio.to_thread(
+            generate_assignment,
+            full_text=full_text,
+            question_types=question_types,
+            difficulty=difficulty,
+            num_questions=num_questions,
+            language=job.get("detected_language", "en"),
+        )
+        return assignment
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Assignment generation failed: {str(exc)}")
+
+
 @app.delete("/api/transcribe/{job_id}")
 async def delete_job(job_id: str):
     """Clean up a job, its audio file, and any exported files."""
     if job_id not in RESULTS:
         raise HTTPException(status_code=404, detail="Job not found")
 
-    # Remove uploaded audio
     for f in UPLOAD_DIR.glob(f"{job_id}*"):
         f.unlink(missing_ok=True)
 
-    # FIX: remove all export files for this job
     cleanup_export(job_id)
-
     del RESULTS[job_id]
     return {"message": "Job deleted"}
 
@@ -194,31 +236,40 @@ async def run_transcription(
     audio_path: str,
     language_hint: str,
     script: str,
+    provider: str = "whisper",
 ):
-    """Background task: transcribe audio and store result."""
+    """Background task: transcribe audio using selected provider and store result."""
     try:
-        result = await asyncio.to_thread(
-            transcribe_audio,
-            audio_path=audio_path,
-            language_hint=language_hint,
-            script=script,
-        )
+        if provider == "grok":
+            result = await asyncio.to_thread(
+                transcribe_audio_grok,
+                audio_path=audio_path,
+                language_hint=language_hint,
+                script=script,
+            )
+        else:
+            result = await asyncio.to_thread(
+                transcribe_audio,
+                audio_path=audio_path,
+                language_hint=language_hint,
+                script=script,
+            )
 
-        language_mix      = detect_language_mix(result["segments"])
+        language_mix           = detect_language_mix(result["segments"])
         result["language_mix"] = language_mix
-        result["job_id"]  = job_id
-        result["status"]  = "done"
+        result["job_id"]       = job_id
+        result["status"]       = "done"
 
         RESULTS[job_id] = result
 
     except Exception as exc:
         RESULTS[job_id] = {
-            "job_id": job_id,
-            "status": "error",
-            "error":  str(exc),
+            "job_id":   job_id,
+            "status":   "error",
+            "error":    str(exc),
+            "provider": provider,
         }
     finally:
-        # FIX: always remove the uploaded audio once transcription finishes
         for f in UPLOAD_DIR.glob(f"{job_id}*"):
             f.unlink(missing_ok=True)
 

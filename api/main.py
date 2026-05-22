@@ -22,10 +22,12 @@ app.add_middleware(
 UPLOAD_DIR = Path("uploads")
 UPLOAD_DIR.mkdir(exist_ok=True)
 
+# UPDATED: Added an optional error field so Pydantic knows how to parse error states
 class JobResponse(BaseModel):
     job_id: str
     status: str
     progress: int = 0
+    error: Optional[str] = None
     result: Optional[dict] = None
 
 def validate_audio_file(file: UploadFile) -> bool:
@@ -48,28 +50,53 @@ async def transcribe_audio(file: UploadFile = File(...)):
         raise HTTPException(status_code=400, detail="Invalid audio file format")
     
     job_id = str(uuid.uuid4())
-    redis_store.set_job(job_id, {"status": "processing", "progress": 0})
     
-    # Start background task
-    asyncio.create_task(process_transcription(job_id, file))
-    return JobResponse(job_id=job_id, status="processing")
-
-async def process_transcription(job_id: str, file: UploadFile):
+    # FIX 1: Read the file bytes completely right here while the request context is alive!
+    # This prevents the "I/O operation on closed file" error.
     try:
         content = await file.read()
-        file_path = UPLOAD_DIR / f"{job_id}_{file.filename}"
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to read upload stream: {str(e)}")
+    
+    redis_store.set_job(job_id, {"status": "processing", "progress": 0})
+    
+    # Pass the raw binary content down to the background task instead of the ephemeral file object
+    asyncio.create_task(process_transcription(job_id, file.filename, content))
+    return JobResponse(job_id=job_id, status="processing")
+
+# UPDATED: Expects raw bytes and filename string now
+async def process_transcription(job_id: str, filename: str, content: bytes):
+    try:
+        file_path = UPLOAD_DIR / f"{job_id}_{filename}"
         file_path.write_bytes(content)
         
         # TODO: Call your actual transcription logic here
-        redis_store.set_job(job_id, {"status": "completed", "progress": 100, "result": {"transcript": "..."}})
+        
+        # FIX 2: Ensure job_id is saved alongside the payload on completion
+        redis_store.set_job(job_id, {
+            "job_id": job_id,
+            "status": "completed", 
+            "progress": 100, 
+            "result": {"transcript": "..."}
+        })
     except Exception as e:
-        redis_store.set_job(job_id, {"status": "error", "error": str(e)})
+        # FIX 3: Ensure job_id is explicitly saved alongside the error description
+        redis_store.set_job(job_id, {
+            "job_id": job_id,
+            "status": "error", 
+            "error": str(e)
+        })
 
 @app.get("/status/{job_id}", response_model=JobResponse)
 async def get_status(job_id: str):
     job = redis_store.get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
+    
+    # FIX 4: Safety double-check—if Redis lost the job_id, patch it dynamically
+    if isinstance(job, dict) and "job_id" not in job:
+        job["job_id"] = job_id
+        
     return JobResponse(**job)
 
 @app.get("/health")

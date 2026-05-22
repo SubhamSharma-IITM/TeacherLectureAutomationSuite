@@ -2,7 +2,8 @@
 
 const API_BASE = import.meta.env.VITE_API_URL ?? "http://localhost:8000";
 
-// FIX: shared fetch wrapper — avoids repeating error handling everywhere
+// ── Shared fetch wrapper ───────────────────────────────────────────────────────
+
 async function apiFetch(path, options = {}) {
   const res = await fetch(`${API_BASE}${path}`, options);
   if (!res.ok) {
@@ -12,24 +13,26 @@ async function apiFetch(path, options = {}) {
   return res.json();
 }
 
+// ── Transcription ──────────────────────────────────────────────────────────────
+
 /**
  * Upload an audio file and start a transcription job.
- * Returns { job_id, status }
+ * provider: "whisper" (default) | "grok" (for long videos)
  */
 export async function uploadAudio(audioBlob, filename, settings) {
-  const formData = new FormData();
-  formData.append("file", audioBlob, filename);
-  formData.append("language_hint", settings.languageHint ?? "auto");
-  formData.append("script", settings.script ?? "devanagari");
-
-  // FIX: validate blob before sending — catches empty recordings early
   if (!audioBlob || audioBlob.size === 0) {
     throw new Error("Audio file is empty. Please try recording again.");
   }
 
+  const formData = new FormData();
+  formData.append("file",          audioBlob, filename);
+  formData.append("language_hint", settings.languageHint ?? "auto");
+  formData.append("script",        settings.script        ?? "devanagari");
+  formData.append("provider",      settings.provider      ?? "whisper");
+
   return apiFetch("/api/transcribe", {
     method: "POST",
-    body: formData,
+    body:   formData,
   });
 }
 
@@ -37,7 +40,6 @@ export async function uploadAudio(audioBlob, filename, settings) {
  * Poll for the status/result of a transcription job.
  */
 export async function pollJob(jobId) {
-  // FIX: guard against accidental calls with no jobId
   if (!jobId) throw new Error("No job ID provided.");
   return apiFetch(`/api/transcribe/${jobId}`);
 }
@@ -47,7 +49,6 @@ export async function pollJob(jobId) {
  * format: "txt" | "pdf" | "srt"
  */
 export async function getExportUrl(jobId, format = "txt") {
-  // FIX: returns URL directly — FileResponse from FastAPI, open in browser
   if (!["txt", "pdf", "srt"].includes(format)) {
     throw new Error(`Invalid format: ${format}`);
   }
@@ -60,4 +61,26 @@ export async function getExportUrl(jobId, format = "txt") {
 export async function deleteJob(jobId) {
   if (!jobId) throw new Error("No job ID provided.");
   return apiFetch(`/api/transcribe/${jobId}`, { method: "DELETE" });
+}
+
+// ── Assignment ─────────────────────────────────────────────────────────────────
+
+/**
+ * Generate a practice assignment from a completed transcript.
+ * questionTypes: ["mcq", "short_answer", "true_false"]
+ * difficulty:    "easy" | "medium" | "hard"
+ * numQuestions:  1–50
+ */
+export async function generateAssignment(jobId, { questionTypes, difficulty, numQuestions }) {
+  if (!jobId) throw new Error("No job ID provided.");
+
+  const formData = new FormData();
+  questionTypes.forEach((t) => formData.append("question_types", t));
+  formData.append("difficulty",     difficulty);
+  formData.append("num_questions",  numQuestions);
+
+  return apiFetch(`/api/assignment/${jobId}`, {
+    method: "POST",
+    body:   formData,
+  });
 }

@@ -45,6 +45,7 @@ teacher-portal/drive_id.json
 !COPYING
 !INSTALL
 !README.rst
+!README.md
 
 # Exclude lock files
 *.lock.json

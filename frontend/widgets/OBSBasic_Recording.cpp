@@ -228,6 +228,18 @@ void OBSBasic::RecordingStop(int code, QString last_error)
 	if (diskFullTimer->isActive())
 		diskFullTimer->stop();
 
+	const bool acadzaUpload =
+		acadzaPendingUploadAfterStop && code == OBS_OUTPUT_SUCCESS && outputHandler &&
+		!outputHandler->lastRecordingPath.empty();
+	const QString acadzaRecordingPath =
+		acadzaUpload ? QString::fromStdString(outputHandler->lastRecordingPath)
+			     : QString();
+
+	acadzaPendingUploadAfterStop = false;
+
+	if (acadzaUpload)
+		AcadzaStartUpload(acadzaRecordingPath);
+
 	AutoRemux(outputHandler->lastRecordingPath.c_str());
 
 	OnDeactivate();

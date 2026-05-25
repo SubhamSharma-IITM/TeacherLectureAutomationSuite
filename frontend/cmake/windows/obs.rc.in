@@ -7,12 +7,12 @@ BEGIN
   BEGIN
     BLOCK "040904B0"
     BEGIN
-      VALUE "CompanyName", "OBS"
-      VALUE "FileDescription", "OBS Studio"
+      VALUE "CompanyName", "${OBS_COMPANY_NAME}"
+      VALUE "FileDescription", "${OBS_PRODUCT_NAME}"
       VALUE "FileVersion", "${OBS_VERSION_CANONICAL}"
-      VALUE "InternalName", "obs"
-      VALUE "OriginalFilename", "obs"
-      VALUE "ProductName", "OBS Studio"
+      VALUE "InternalName", "acadza-studio"
+      VALUE "OriginalFilename", "obs64"
+      VALUE "ProductName", "${OBS_PRODUCT_NAME}"
       VALUE "ProductVersion", "${OBS_VERSION_CANONICAL}"
       VALUE "Comments", "Free and open source software for video recording and live streaming"
       VALUE "LegalCopyright", "${OBS_LEGAL_COPYRIGHT}"

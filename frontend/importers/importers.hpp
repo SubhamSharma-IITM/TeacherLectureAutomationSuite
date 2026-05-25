@@ -62,7 +62,7 @@ public:
 
 class StudioImporter : public Importer {
 public:
-	std::string Prog() { return "OBSStudio"; };
+	std::string Prog() { return "AcadzaStudio"; };
 	int ImportScenes(const std::string &path, std::string &name, json11::Json &res);
 	bool Check(const std::string &path);
 	std::string Name(const std::string &path);

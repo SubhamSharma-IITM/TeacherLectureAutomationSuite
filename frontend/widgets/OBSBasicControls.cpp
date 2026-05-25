@@ -45,6 +45,14 @@ OBSBasicControls::OBSBasicControls(OBSBasic *main) : QFrame(nullptr), ui(new Ui:
 	connect(
 		ui->settingsButton, &QPushButton::clicked, this, [this]() { emit this->SettingsButtonClicked(); },
 		Qt::DirectConnection);
+	connect(
+		ui->acadzaConnectDriveButton, &QPushButton::clicked, this,
+		[this]() { emit this->AcadzaConnectDriveClicked(); }, Qt::DirectConnection);
+	connect(
+		ui->acadzaEndClassButton, &QPushButton::clicked, this,
+		[this]() { emit this->AcadzaEndClassClicked(); }, Qt::DirectConnection);
+
+	ui->acadzaDriveEmailLabel->setVisible(false);
 
 	/* Transfer menu actions signals as OBSBasicControls signals */
 	connect(
@@ -280,4 +288,18 @@ void OBSBasicControls::EnableVirtualCamButtons()
 {
 	ui->virtualCamButton->setVisible(true);
 	ui->virtualCamConfigButton->setVisible(true);
+}
+
+void OBSBasicControls::UpdateAcadzaDriveStatus(bool connected, const QString &email)
+{
+	ui->acadzaConnectDriveButton->setVisible(!connected);
+	ui->acadzaDriveEmailLabel->setVisible(connected);
+	if (connected) {
+		ui->acadzaDriveEmailLabel->setText(email);
+		ui->acadzaDriveEmailLabel->setToolTip(
+			QTStr("Acadza.DriveConnected.Tooltip").arg(email));
+	} else {
+		ui->acadzaDriveEmailLabel->clear();
+		ui->acadzaDriveEmailLabel->setToolTip(QString());
+	}
 }

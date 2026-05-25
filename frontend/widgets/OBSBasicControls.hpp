@@ -53,6 +53,8 @@ public:
 	OBSBasicControls(OBSBasic *main);
 	inline ~OBSBasicControls() {}
 
+	void UpdateAcadzaDriveStatus(bool connected, const QString &email);
+
 signals:
 	void StreamButtonClicked();
 	void BroadcastButtonClicked();
@@ -64,6 +66,8 @@ signals:
 	void VirtualCamConfigButtonClicked();
 	void StudioModeButtonClicked();
 	void SettingsButtonClicked();
+	void AcadzaConnectDriveClicked();
+	void AcadzaEndClassClicked();
 
 	void StartStreamMenuActionClicked();
 	void StopStreamMenuActionClicked();

@@ -307,6 +307,8 @@ OBSBasic::OBSBasic(QWidget *parent) : OBSMainWindow(parent), undo_s(ui), ui(new 
 	connect(controls, &OBSBasicControls::StudioModeButtonClicked, this, &OBSBasic::TogglePreviewProgramMode);
 
 	connect(controls, &OBSBasicControls::SettingsButtonClicked, this, &OBSBasic::on_action_Settings_triggered);
+	connect(controls, &OBSBasicControls::AcadzaConnectDriveClicked, this, &OBSBasic::AcadzaConnectDrive);
+	connect(controls, &OBSBasicControls::AcadzaEndClassClicked, this, &OBSBasic::AcadzaEndClass);
 
 	/* Set up transitions combobox connections */
 	connect(this, &OBSBasic::TransitionAdded, this, [this](const QString &name, const QString &uuid) {
@@ -1360,6 +1362,8 @@ void OBSBasic::OBSInit()
 		QString failed_msg = QTStr("PluginsFailedToLoad.Text").arg(failed_plugins);
 		OBSMessageBox::warning(this, QTStr("PluginsFailedToLoad.Title"), failed_msg);
 	}
+
+	QTimer::singleShot(500, this, &OBSBasic::AcadzaRefreshDriveStatus);
 }
 
 void OBSBasic::OnFirstLoad()
@@ -2087,10 +2091,8 @@ void OBSBasic::UpdateTitleBar()
 	const char *profile = config_get_string(App()->GetUserConfig(), "Basic", "Profile");
 	const char *sceneCollection = config_get_string(App()->GetUserConfig(), "Basic", "SceneCollection");
 
-	name << "OBS ";
-	if (previewProgramMode)
-		name << "Studio ";
-
+	name << Str("OBSStudio");
+	name << " ";
 	name << App()->GetVersionString(false);
 	if (safe_mode)
 		name << " (" << Str("TitleBar.SafeMode") << ")";

@@ -24,10 +24,10 @@ extern bool opt_minimize_tray;
 void OBSBasic::SystemTrayInit()
 {
 #ifdef __APPLE__
-	QIcon trayIconFile = QIcon(":/res/images/obs_macos.svg");
+	QIcon trayIconFile = QIcon(":/res/images/acadza_studio.svg");
 	trayIconFile.setIsMask(true);
 #else
-	QIcon trayIconFile = QIcon(":/res/images/obs.png");
+	QIcon trayIconFile = QIcon(":/res/images/acadza_studio.svg");
 #endif
 	trayIcon = new QSystemTrayIcon(QIcon::fromTheme("obs-tray", trayIconFile), this);
 	trayIcon->setToolTip("OBS Studio");

@@ -42,7 +42,9 @@
 #include <QAccessible>
 #include <QSystemTrayIcon>
 
+#include <atomic>
 #include <deque>
+#include <memory>
 
 extern volatile bool recording_paused;
 
@@ -716,10 +718,10 @@ private:
 			TaskbarOverlaySetStatus(TaskbarOverlayStatusInactive);
 			if (trayIcon && trayIcon->isVisible()) {
 #ifdef __APPLE__
-				QIcon trayIconFile = QIcon(":/res/images/obs_macos.svg");
+				QIcon trayIconFile = QIcon(":/res/images/acadza_studio.svg");
 				trayIconFile.setIsMask(true);
 #else
-				QIcon trayIconFile = QIcon(":/res/images/obs.png");
+				QIcon trayIconFile = QIcon(":/res/images/acadza_studio.svg");
 #endif
 				trayIcon->setIcon(QIcon::fromTheme("obs-tray", trayIconFile));
 			}
@@ -1025,6 +1027,25 @@ signals:
 	void RecordingUnpaused();
 	void RecordingStopping();
 	void RecordingStopped();
+
+	/* -------------------------------------
+	 * MARK: - OBSBasic_Acadza (Teacher Portal)
+	 * -------------------------------------
+	 */
+private:
+	bool acadzaPendingUploadAfterStop = false;
+	QTimer *acadzaDrivePollTimer = nullptr;
+	QPointer<QThread> acadzaUploadThread;
+	std::shared_ptr<std::atomic<bool>> acadzaUploadCanceled;
+
+	QString AcadzaPortalBaseUrl() const;
+	void AcadzaStartUpload(const QString &rawRecordingPath);
+	void AcadzaCancelUpload();
+	void AcadzaRefreshDriveStatus();
+
+private slots:
+	void AcadzaConnectDrive();
+	void AcadzaEndClass();
 
 	/* -------------------------------------
 	 * MARK: - OBSBasic_ReplayBuffer
